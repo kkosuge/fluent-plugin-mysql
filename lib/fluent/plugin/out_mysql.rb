@@ -13,6 +13,7 @@ class Fluent::MysqlOutput < Fluent::BufferedOutput
   config_param :columns, :string, :default => nil
   config_param :tag_column, :string, :default => nil
   config_param :time_column, :string, :default => nil
+  config_param :priority_time_key, :string, :default => nil
 
   config_param :format, :string, :default => "raw" # or json
 
@@ -29,7 +30,21 @@ class Fluent::MysqlOutput < Fluent::BufferedOutput
     # TODO tag_mapped
 
     if @format == 'json'
-      @format_proc = Proc.new{|tag, time, record| record.to_json}
+      @format_proc = Proc.new{|tag, time, record|
+        if @priority_time_key
+          if record.has_key? @priority_time_key
+            @priority_time = record[@priority_time_key]
+          elsif record.has_key? @priority_time_key.to_sym
+            @priority_time = record[@priority_time_key.to_sym]
+          else
+            @priority_time = nil
+          end
+        else
+          @priority_time = nil
+        end
+
+        record.to_json
+      }
     else
       @key_names = @key_names.split(',')
       @format_proc = Proc.new{|tag, time, record| @key_names.map{|k| record[k]}}
@@ -71,10 +86,24 @@ class Fluent::MysqlOutput < Fluent::BufferedOutput
   end
 
   def format(tag, time, record)
+    datum = @format_proc.call(tag, time, record)
+
+    if @time_column
+      time = -> {
+        if @priority_time
+          @priority_time
+        elsif time
+          Time.at(time).to_s
+        else
+          Time.now.to_s
+        end
+      }.call
+    end
+
     data = [].tap{|array|
-      array << @format_proc.call(tag, time, record)
-      array << tag if @tag_column
-      array << time = Time.at(time).to_s if time && @time_column
+      array << datum
+      array << tag  if @tag_column
+      array << time if @time_column
      }
     data = data.first if data.size == 1
     [tag, time, data].to_msgpack
